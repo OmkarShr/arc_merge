@@ -1,11 +1,4 @@
 __pycache__/
 *.py[cod]
-*.class
-*.pt
-.env
-.venv
-env/
-venv/
-ENV/
-*.log
+*$py.class
 .DS_Store
