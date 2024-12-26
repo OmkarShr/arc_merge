@@ -17,17 +17,17 @@ struct Point {
 };
 
 enum class SegmentType { LINE, ARC };
-enum class ArcDirection { CW, CCW };
 
 struct Segment {
     SegmentType type;
     Point start;
     Point end;
 
-    // Arc-specific fields
-    Point center;  
-    double radius; 
-    ArcDirection direction; // Clockwise or Counterclockwise
+    // Arc fields
+    Point center;
+    double radius;
+    double startAngle;
+    double endAngle;
 };
 
 // Distance between two points
@@ -146,13 +146,7 @@ void applyFFTFilter(std::vector<Point>& points, double /*toler*/) {
     }
 }
 
-// Determine arc direction via cross product of center->start and center->end
-static ArcDirection findArcDirection(const Point& center, const Point& start, const Point& end) {
-    double cross = (start.x - center.x)*(end.y - center.y) - (start.y - center.y)*(end.x - center.x);
-    return (cross < 0.0) ? ArcDirection::CW : ArcDirection::CCW;
-}
-
-// Convert simplified points to segments
+// Build final segments from points
 std::vector<Segment> buildSimplifiedSegments(const std::vector<Point>& points, double toler) {
     std::vector<Segment> result;
     if (points.size() < 2) return result;
@@ -165,32 +159,35 @@ std::vector<Segment> buildSimplifiedSegments(const std::vector<Point>& points, d
         seg.end   = points[i+1];
 
         if(std::abs(curv) < toler) {
+            // LINE
             seg.type = SegmentType::LINE;
             seg.center = {0,0};
             seg.radius = 0;
-            seg.direction = ArcDirection::CW; // unused
+            seg.startAngle = 0;
+            seg.endAngle   = 0;
         } else {
+            // ARC
             seg.type = SegmentType::ARC;
-            seg.center = points[i+1]; // naive
+            seg.center = points[i+1];
             seg.radius = dist(points[i], points[i+1]);
-            seg.direction = findArcDirection(seg.center, seg.start, seg.end);
+            seg.startAngle = std::atan2(points[i].y - seg.center.y, points[i].x - seg.center.x);
+            seg.endAngle   = std::atan2(points[i+1].y - seg.center.y, points[i+1].x - seg.center.x);
         }
         result.push_back(seg);
         i++;
     }
 
-    // Handle leftover if any
     if(i + 1 < points.size()) {
         Segment seg;
         seg.type = SegmentType::LINE;
         seg.start = points[i];
-        seg.end = points.back();
+        seg.end   = points.back();
         seg.center = {0,0};
         seg.radius = 0;
-        seg.direction = ArcDirection::CW; // unused
+        seg.startAngle = 0;
+        seg.endAngle   = 0;
         result.push_back(seg);
     }
-
     return result;
 }
 
@@ -211,7 +208,6 @@ std::vector<Segment> readSegmentsFromCSV(const std::string& filename) {
         Segment seg;
         if (typeStr == "LINE") {
             seg.type = SegmentType::LINE;
-            seg.direction = ArcDirection::CW; // not used for lines
         } else if (typeStr == "ARC") {
             seg.type = SegmentType::ARC;
         } else {
@@ -222,13 +218,13 @@ std::vector<Segment> readSegmentsFromCSV(const std::string& filename) {
         ss >> seg.start.y; ss.ignore();
         ss >> seg.end.x;   ss.ignore();
         ss >> seg.end.y;
+
         if (seg.type == SegmentType::ARC) {
             ss.ignore();
             ss >> seg.center.x; ss.ignore();
             ss >> seg.center.y; ss.ignore();
             ss >> seg.radius;
-            // Attempt to deduce direction if missing from input 
-            seg.direction = findArcDirection(seg.center, seg.start, seg.end);
+            // No "direction" field anymore, ignoring
         }
         segments.push_back(seg);
     }
@@ -248,7 +244,6 @@ void writeSegmentsToCSV(const std::vector<Segment>& segments, const std::string&
                 << seg.start.x << "," << seg.start.y << ","
                 << seg.end.x   << "," << seg.end.y   << "\n";
         } else {
-            // ARC
             out << "ARC,"
                 << seg.start.x << "," << seg.start.y << ","
                 << seg.end.x   << "," << seg.end.y   << ","
@@ -269,11 +264,11 @@ int main(int argc, char* argv[]) {
         std::string filename = argv[1];
         double tolerance = std::stod(argv[2]);
 
-        // Read input
+        // 1. Read input
         std::vector<Segment> original = readSegmentsFromCSV(filename);
         std::cout << "Original segments: " << original.size() << std::endl;
 
-        // Flatten points
+        // 2. Flatten all segment endpoints
         std::vector<Point> points;
         for(const auto& seg : original){
             points.push_back(seg.start);
@@ -282,25 +277,25 @@ int main(int argc, char* argv[]) {
             points.push_back(original.back().end);
         }
 
-        // Optional FFT filter
+        // 3. Optional FFT-based smoothing
         applyFFTFilter(points, tolerance);
 
-        // RDP simplify
+        // 4. RDP simplify
         points = rdpSimplify(points, tolerance);
 
-        // Build final segments
+        // 5. Convert simplified points to final (line/arc) segments
         auto simplified = buildSimplifiedSegments(points, tolerance);
         std::cout << "Simplified segments: " << simplified.size() << std::endl;
 
-        // Write output CSV
+        // 6. Export to CSV
         std::string outFile = filename.substr(0, filename.find_last_of('.')) + "_simplified.csv";
         writeSegmentsToCSV(simplified, outFile);
         std::cout << "Wrote simplified segments to " << outFile << std::endl;
 
+        return 0;
     } catch(const std::exception &e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
-    return 0;
 }
 
